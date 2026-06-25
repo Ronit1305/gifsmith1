@@ -1,0 +1,634 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>GIFsmith — Video to GIF</title>
+<style>
+  /* ── Reset & base ── */
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg:        #0e0e0f;
+    --surface:   #18181b;
+    --border:    #2a2a2f;
+    --accent:    #7c6dfa;
+    --accent-lt: #a594fd;
+    --green:     #34d399;
+    --red:       #f87171;
+    --amber:     #fbbf24;
+    --text:      #e4e4e7;
+    --muted:     #71717a;
+    --radius:    10px;
+    --mono:      "JetBrains Mono", "Fira Code", monospace;
+  }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: system-ui, -apple-system, sans-serif;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
+
+  /* ── Header ── */
+  header {
+    width: 100%;
+    max-width: 900px;
+    padding: 2rem 1.5rem 1rem;
+    display: flex;
+    align-items: baseline;
+    gap: .75rem;
+  }
+  .logo {
+    font-family: var(--mono);
+    font-size: 1.4rem;
+    font-weight: 700;
+    letter-spacing: -.02em;
+    color: var(--text);
+  }
+  .logo span { color: var(--accent); }
+  .tagline {
+    font-size: .8rem;
+    color: var(--muted);
+    letter-spacing: .04em;
+    text-transform: uppercase;
+  }
+
+  /* ── Main layout ── */
+  main {
+    width: 100%;
+    max-width: 900px;
+    padding: 0 1.5rem 3rem;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1.25rem;
+  }
+  @media (max-width: 650px) {
+    main { grid-template-columns: 1fr; }
+  }
+
+  /* ── Card ── */
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 1.25rem;
+  }
+  .card-title {
+    font-size: .7rem;
+    font-weight: 600;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 1rem;
+  }
+
+  /* ── Drop zone ── */
+  #drop-zone {
+    border: 2px dashed var(--border);
+    border-radius: 8px;
+    padding: 2rem 1rem;
+    text-align: center;
+    cursor: pointer;
+    transition: border-color .2s, background .2s;
+    margin-bottom: 1rem;
+  }
+  #drop-zone:hover, #drop-zone.drag-over {
+    border-color: var(--accent);
+    background: rgba(124, 109, 250, .06);
+  }
+  #drop-zone .icon { font-size: 2rem; margin-bottom: .5rem; }
+  #drop-zone .hint { font-size: .82rem; color: var(--muted); line-height: 1.5; }
+  #drop-zone .hint b { color: var(--accent-lt); font-weight: 500; }
+
+  /* ── File info ── */
+  #file-info {
+    display: none;
+    background: rgba(124,109,250,.08);
+    border: 1px solid rgba(124,109,250,.25);
+    border-radius: 8px;
+    padding: .75rem 1rem;
+    font-size: .82rem;
+    color: var(--text);
+    margin-bottom: 1rem;
+    word-break: break-all;
+  }
+  #file-info .fi-name { font-family: var(--mono); font-size: .78rem; }
+  #file-info .fi-meta { color: var(--muted); margin-top: .25rem; }
+
+  /* ── Settings ── */
+  .field { margin-bottom: 1rem; }
+  .field label {
+    display: flex;
+    justify-content: space-between;
+    font-size: .78rem;
+    color: var(--muted);
+    margin-bottom: .35rem;
+  }
+  .field label span { color: var(--accent-lt); font-family: var(--mono); }
+
+  input[type=range] {
+    width: 100%;
+    accent-color: var(--accent);
+    cursor: pointer;
+    height: 4px;
+  }
+
+  .dim-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: .75rem;
+  }
+  .trim-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: .75rem;
+  }
+
+  input[type=number] {
+    width: 100%;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text);
+    font-family: var(--mono);
+    font-size: .85rem;
+    padding: .45rem .65rem;
+    outline: none;
+    transition: border-color .15s;
+  }
+  input[type=number]:focus { border-color: var(--accent); }
+
+  /* ── Presets ── */
+  .presets {
+    display: flex;
+    gap: .5rem;
+    flex-wrap: wrap;
+    margin-bottom: 1rem;
+  }
+  .preset-btn {
+    font-size: .72rem;
+    padding: .35rem .75rem;
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: 20px;
+    color: var(--muted);
+    cursor: pointer;
+    transition: all .15s;
+    white-space: nowrap;
+  }
+  .preset-btn:hover {
+    border-color: var(--accent);
+    color: var(--accent-lt);
+  }
+  .preset-btn.active {
+    background: rgba(124,109,250,.15);
+    border-color: var(--accent);
+    color: var(--accent-lt);
+  }
+
+  /* ── Error ── */
+  #error-box {
+    display: none;
+    background: rgba(248,113,113,.08);
+    border: 1px solid rgba(248,113,113,.3);
+    border-radius: 8px;
+    padding: .65rem .9rem;
+    font-size: .8rem;
+    color: var(--red);
+    margin-bottom: 1rem;
+    word-break: break-word;
+  }
+
+  /* ── Progress ── */
+  #progress-wrap {
+    display: none;
+    margin-bottom: 1rem;
+  }
+  .progress-label {
+    display: flex;
+    justify-content: space-between;
+    font-size: .75rem;
+    color: var(--muted);
+    margin-bottom: .4rem;
+  }
+  .progress-bar-track {
+    height: 4px;
+    background: var(--border);
+    border-radius: 99px;
+    overflow: hidden;
+  }
+  .progress-bar-fill {
+    height: 100%;
+    background: linear-gradient(90deg, var(--accent), var(--accent-lt));
+    border-radius: 99px;
+    transition: width .4s ease;
+    width: 0%;
+  }
+
+  /* ── Convert button ── */
+  #convert-btn {
+    width: 100%;
+    padding: .75rem;
+    background: var(--accent);
+    color: #fff;
+    font-size: .9rem;
+    font-weight: 600;
+    border: none;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: opacity .15s, transform .1s;
+    letter-spacing: .01em;
+  }
+  #convert-btn:hover:not(:disabled) { opacity: .9; }
+  #convert-btn:active:not(:disabled) { transform: scale(.99); }
+  #convert-btn:disabled { opacity: .4; cursor: not-allowed; }
+
+  /* ── Output panel ── */
+  #output-placeholder {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: 280px;
+    text-align: center;
+    gap: .75rem;
+    color: var(--muted);
+  }
+  #output-placeholder .ph-icon { font-size: 2.5rem; opacity: .3; }
+  #output-placeholder .ph-text { font-size: .82rem; }
+
+  #output-panel { display: none; }
+
+  #gif-preview {
+    width: 100%;
+    border-radius: 8px;
+    display: block;
+    margin-bottom: 1rem;
+    image-rendering: auto;
+    background: var(--bg);
+  }
+
+  .output-meta {
+    font-size: .75rem;
+    color: var(--muted);
+    font-family: var(--mono);
+    margin-bottom: 1rem;
+    display: flex;
+    flex-wrap: wrap;
+    gap: .5rem;
+  }
+  .meta-pill {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 20px;
+    padding: .2rem .6rem;
+  }
+  .meta-pill.green { border-color: rgba(52,211,153,.35); color: var(--green); }
+
+  .btn-row {
+    display: flex;
+    flex-direction: column;
+    gap: .6rem;
+  }
+  .dl-btn {
+    width: 100%;
+    padding: .65rem;
+    border-radius: 8px;
+    font-size: .85rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: opacity .15s;
+    border: none;
+    letter-spacing: .01em;
+  }
+  .dl-btn:hover { opacity: .85; }
+  .dl-btn.primary { background: var(--accent); color: #fff; }
+  .dl-btn.secondary {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text);
+  }
+  .dl-btn:disabled { opacity: .45; cursor: not-allowed; }
+
+  /* ── Hidden file input ── */
+  #file-input { display: none; }
+
+  /* ── Divider ── */
+  hr.divider {
+    border: none;
+    border-top: 1px solid var(--border);
+    margin: .75rem 0;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo"><span>GIF</span>smith</div>
+  <div class="tagline">Video → GIF converter</div>
+</header>
+
+<main>
+  <!-- ── LEFT: Upload + Settings ── -->
+  <div class="card">
+    <div class="card-title">Source &amp; Settings</div>
+
+    <!-- Drop zone -->
+    <div id="drop-zone" tabindex="0" role="button" aria-label="Upload video">
+      <div class="icon">🎬</div>
+      <div class="hint">
+        Drag &amp; drop a video<br>
+        or <b>click to browse</b>
+      </div>
+    </div>
+    <input type="file" id="file-input" accept="video/*,.mkv,.ts">
+
+    <!-- File info -->
+    <div id="file-info">
+      <div class="fi-name" id="fi-name">—</div>
+      <div class="fi-meta" id="fi-meta">—</div>
+    </div>
+
+    <!-- Presets -->
+    <div class="presets">
+      <button class="preset-btn" id="preset-reddit" onclick="applyPreset('reddit')">📱 Reddit (9:16)</button>
+      <button class="preset-btn" id="preset-hq"     onclick="applyPreset('hq')">✨ High quality</button>
+      <button class="preset-btn" id="preset-tiny"   onclick="applyPreset('tiny')">📦 Compact</button>
+    </div>
+
+    <!-- FPS -->
+    <div class="field">
+      <label>FPS <span id="fps-val">15</span></label>
+      <input type="range" id="fps" min="6" max="30" value="15"
+             oninput="document.getElementById('fps-val').textContent=this.value;clearPreset()">
+    </div>
+
+    <!-- Dimensions -->
+    <div class="field">
+      <label>Dimensions <small style="color:var(--muted)">(-1 = auto)</small></label>
+      <div class="dim-row">
+        <input type="number" id="width"  value="480"  placeholder="Width"  min="-1" max="1920"
+               oninput="clearPreset()">
+        <input type="number" id="height" value="-1"   placeholder="Height" min="-1" max="1920"
+               oninput="clearPreset()">
+      </div>
+    </div>
+
+    <!-- Trim -->
+    <div class="field">
+      <label>Trim (seconds) <small style="color:var(--muted)">optional</small></label>
+      <div class="trim-row">
+        <input type="number" id="start" value="0"  placeholder="Start" min="0" step=".1">
+        <input type="number" id="end"   value=""   placeholder="End"   min="0" step=".1">
+      </div>
+    </div>
+
+    <!-- Error -->
+    <div id="error-box"></div>
+
+    <!-- Progress -->
+    <div id="progress-wrap">
+      <div class="progress-label">
+        <span id="stage-label">Working…</span>
+        <span id="pct-label">0%</span>
+      </div>
+      <div class="progress-bar-track">
+        <div class="progress-bar-fill" id="progress-fill"></div>
+      </div>
+    </div>
+
+    <!-- Convert -->
+    <button id="convert-btn" disabled onclick="startConvert()">Convert to GIF</button>
+  </div>
+
+  <!-- ── RIGHT: Output ── -->
+  <div class="card">
+    <div class="card-title">Output</div>
+
+    <div id="output-placeholder">
+      <div class="ph-icon">🖼</div>
+      <div class="ph-text">Your GIF will appear here</div>
+    </div>
+
+    <div id="output-panel">
+      <img id="gif-preview" src="" alt="GIF preview">
+
+      <div class="output-meta" id="output-meta"></div>
+
+      <div class="btn-row">
+        <button class="dl-btn primary" id="dl-gif-btn">⬇ Download GIF</button>
+        <hr class="divider">
+        <button class="dl-btn secondary" id="dl-mp4-btn" style="display:none">
+          📹 Export silent MP4 (for Reddit / WhatsApp)
+        </button>
+      </div>
+    </div>
+  </div>
+</main>
+
+<script>
+// ── State ─────────────────────────────────────────────────────────────────────
+let selectedFile = null;
+let currentJobId = null;
+let pollTimer    = null;
+let mp4PollTimer = null;
+
+// ── File handling ─────────────────────────────────────────────────────────────
+const dropZone  = document.getElementById('drop-zone');
+const fileInput = document.getElementById('file-input');
+
+dropZone.addEventListener('click', () => fileInput.click());
+dropZone.addEventListener('keydown', e => { if (e.key==='Enter'||e.key===' ') fileInput.click(); });
+fileInput.addEventListener('change', e => { if (e.target.files[0]) handleFile(e.target.files[0]); });
+
+dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('drag-over'); });
+dropZone.addEventListener('dragleave', ()=> dropZone.classList.remove('drag-over'));
+dropZone.addEventListener('drop', e => {
+  e.preventDefault();
+  dropZone.classList.remove('drag-over');
+  if (e.dataTransfer.files[0]) handleFile(e.dataTransfer.files[0]);
+});
+
+function handleFile(f) {
+  selectedFile = f;
+  document.getElementById('file-info').style.display = 'block';
+  document.getElementById('fi-name').textContent = f.name;
+  document.getElementById('fi-meta').textContent =
+    `${(f.size / 1e6).toFixed(1)} MB · ${f.type || 'video'}`;
+  document.getElementById('convert-btn').disabled = false;
+  hideError();
+  resetOutput();
+}
+
+// ── Presets ───────────────────────────────────────────────────────────────────
+const PRESETS = {
+  reddit: { fps: 20, width: -1,  height: 480 },
+  hq:     { fps: 24, width: 720, height: -1  },
+  tiny:   { fps: 10, width: 320, height: -1  },
+};
+let activePreset = null;
+
+function applyPreset(name) {
+  const p = PRESETS[name];
+  setField('fps', p.fps);
+  document.getElementById('fps-val').textContent = p.fps;
+  setField('width', p.width);
+  setField('height', p.height);
+  document.querySelectorAll('.preset-btn').forEach(b => b.classList.remove('active'));
+  document.getElementById(`preset-${name}`).classList.add('active');
+  activePreset = name;
+}
+
+function clearPreset() {
+  document.querySelectorAll('.preset-btn').forEach(b => b.classList.remove('active'));
+  activePreset = null;
+}
+
+function setField(id, val) {
+  document.getElementById(id).value = val;
+}
+
+// ── Convert ───────────────────────────────────────────────────────────────────
+function startConvert() {
+  if (!selectedFile) return;
+
+  clearInterval(pollTimer);
+  currentJobId = null;
+  hideError();
+  resetOutput();
+
+  const fd = new FormData();
+  fd.append('video', selectedFile);
+  fd.append('fps',    document.getElementById('fps').value);
+  fd.append('width',  document.getElementById('width').value);
+  fd.append('height', document.getElementById('height').value);
+  fd.append('start',  document.getElementById('start').value || '0');
+  const end = document.getElementById('end').value;
+  if (end) fd.append('end', end);
+
+  setProgress('Uploading…', 5);
+  document.getElementById('convert-btn').disabled = true;
+
+  fetch('/api/convert', { method: 'POST', body: fd })
+    .then(r => r.json())
+    .then(d => {
+      if (d.error) { showError(d.error); resetUI(); return; }
+      currentJobId = d.job_id;
+      pollTimer = setInterval(() => pollStatus(currentJobId), 700);
+    })
+    .catch(e => { showError('Network error: ' + e.message); resetUI(); });
+}
+
+function pollStatus(jobId) {
+  fetch(`/api/status/${jobId}`)
+    .then(r => r.json())
+    .then(d => {
+      if (d.error) { clearInterval(pollTimer); showError(d.error); resetUI(); return; }
+      setProgress(d.stage || 'Working…', d.progress || 0);
+      if (d.status === 'done') {
+        clearInterval(pollTimer);
+        showGif(jobId, d.gif_size);
+      } else if (d.status === 'error') {
+        clearInterval(pollTimer);
+        showError(d.error || 'Conversion failed');
+        resetUI();
+      }
+    })
+    .catch(() => {}); // keep polling on transient network blip
+}
+
+// ── Output ────────────────────────────────────────────────────────────────────
+function showGif(jobId, gifSize) {
+  const preview = document.getElementById('gif-preview');
+  preview.src = `/api/preview/${jobId}?t=${Date.now()}`;
+
+  const meta = document.getElementById('output-meta');
+  meta.innerHTML =
+    `<span class="meta-pill green">✓ Done</span>` +
+    `<span class="meta-pill">${(gifSize/1e6).toFixed(2)} MB</span>`;
+
+  document.getElementById('dl-gif-btn').onclick = () => {
+    window.location = `/api/download/${jobId}`;
+  };
+
+  const mp4Btn = document.getElementById('dl-mp4-btn');
+  mp4Btn.style.display = 'block';
+  mp4Btn.disabled = false;
+  mp4Btn.textContent = '📹 Export silent MP4 (for Reddit / WhatsApp)';
+  mp4Btn.onclick = () => exportMp4(jobId);
+
+  document.getElementById('output-placeholder').style.display = 'none';
+  document.getElementById('output-panel').style.display = 'block';
+  resetUI();
+}
+
+function exportMp4(gifJobId) {
+  const btn = document.getElementById('dl-mp4-btn');
+  btn.disabled = true;
+  btn.textContent = '⏳ Encoding MP4…';
+
+  fetch('/api/convert-mp4', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ gif_job_id: gifJobId }),
+  })
+    .then(r => r.json())
+    .then(d => {
+      if (d.error) { btn.textContent = '❌ ' + d.error; btn.disabled = false; return; }
+      mp4PollTimer = setInterval(() => pollMp4(d.job_id, btn), 800);
+    })
+    .catch(e => { btn.textContent = '❌ Error'; btn.disabled = false; });
+}
+
+function pollMp4(jobId, btn) {
+  fetch(`/api/status/${jobId}`)
+    .then(r => r.json())
+    .then(d => {
+      if (d.status === 'done') {
+        clearInterval(mp4PollTimer);
+        btn.textContent = '⬇ Download MP4';
+        btn.disabled = false;
+        btn.onclick = () => { window.location = `/api/download-mp4/${jobId}`; };
+      } else if (d.status === 'error') {
+        clearInterval(mp4PollTimer);
+        btn.textContent = '❌ MP4 failed';
+        btn.disabled = false;
+      }
+    })
+    .catch(() => {});
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+function setProgress(stage, pct) {
+  document.getElementById('progress-wrap').style.display = 'block';
+  document.getElementById('stage-label').textContent = stage;
+  document.getElementById('pct-label').textContent = pct + '%';
+  document.getElementById('progress-fill').style.width = pct + '%';
+}
+
+function showError(msg) {
+  const box = document.getElementById('error-box');
+  box.textContent = msg;
+  box.style.display = 'block';
+}
+function hideError() { document.getElementById('error-box').style.display = 'none'; }
+
+function resetUI() {
+  document.getElementById('convert-btn').disabled = !selectedFile;
+  document.getElementById('progress-wrap').style.display = 'none';
+}
+
+function resetOutput() {
+  clearInterval(mp4PollTimer);
+  document.getElementById('output-panel').style.display = 'none';
+  document.getElementById('output-placeholder').style.display = 'flex';
+  document.getElementById('dl-mp4-btn').style.display = 'none';
+  document.getElementById('gif-preview').src = '';
+}
+</script>
+</body>
+</html>
