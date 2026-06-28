@@ -2,7 +2,6 @@ import os
 import uuid
 import json
 import time
-import random
 import threading
 import subprocess
 import logging
@@ -17,8 +16,8 @@ log = logging.getLogger(__name__)
 UPLOAD_DIR  = Path("/tmp/gifsmith/uploads")
 OUTPUT_DIR  = Path("/tmp/gifsmith/outputs")
 JOBS_FILE   = Path("/tmp/gifsmith/jobs.json")
-MAX_UPLOAD  = 200 * 1024 * 1024          # 200 MB
-JOB_TTL     = 3600                        # delete after 1 hour
+MAX_UPLOAD  = 200 * 1024 * 1024
+JOB_TTL     = 3600
 ALLOWED_EXT = {".mp4", ".mov", ".avi", ".mkv", ".webm", ".flv", ".m4v", ".wmv", ".3gp", ".ts"}
 
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
@@ -51,19 +50,29 @@ def _load_jobs():
 
 
 def _get_job(job_id: str):
-    """Return job from memory, falling back to disk."""
     if job_id in jobs:
         return jobs[job_id]
     _load_jobs()
     return jobs.get(job_id)
 
 
-# ── Background cleanup ────────────────────────────────────────────────────────
+def _upd(job_id: str, updates: dict):
+    """Update a job safely — always reloads from disk first to handle multi-worker setups."""
+    with _jobs_lock:
+        _load_jobs()
+        if job_id not in jobs:
+            jobs[job_id] = {}
+        jobs[job_id].update(updates)
+        _save_jobs()
+
+
+# ── Background cleanup ─────────────────────────────────────────────────────────
 def _cleanup_loop():
     while True:
         time.sleep(300)
         now = time.time()
         with _jobs_lock:
+            _load_jobs()
             dead = [jid for jid, j in list(jobs.items())
                     if now - j.get("created", now) > JOB_TTL]
             for jid in dead:
@@ -74,10 +83,8 @@ def _cleanup_loop():
                             os.remove(p)
                         except Exception:
                             pass
-                # also wipe the palette file
                 pal = OUTPUT_DIR / f"{jid}_palette.png"
-                if pal.exists():
-                    pal.unlink(missing_ok=True)
+                pal.unlink(missing_ok=True)
                 del jobs[jid]
             _save_jobs()
         log.info("Cleanup pass: removed %d expired jobs", len(dead))
@@ -87,7 +94,6 @@ threading.Thread(target=_cleanup_loop, daemon=True).start()
 
 # ── FFmpeg helpers ─────────────────────────────────────────────────────────────
 def _run(cmd: list[str]) -> tuple[int, str]:
-    """Run a subprocess, return (returncode, stderr_tail)."""
     try:
         r = subprocess.run(cmd, capture_output=True, timeout=600)
         return r.returncode, (r.stderr or b"").decode(errors="replace")[-3000:]
@@ -111,27 +117,20 @@ _COLOR_FIX = "setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709"
 
 
 def _convert_gif(job_id: str, params: dict):
-    """Two-pass GIF conversion (palette + convert). Runs in a thread."""
-    j = jobs[job_id]
-    inp   = j["input"]
+    inp     = _get_job(job_id)["input"]
     palette = str(OUTPUT_DIR / f"{job_id}_palette.png")
     gif_out = str(OUTPUT_DIR / f"{job_id}.gif")
 
-    fps    = params["fps"]
-    scale  = _build_scale(params["width"], params["height"])
-    ss     = params.get("start", 0)
-    dur    = params.get("duration")  # None means full video
+    fps   = params["fps"]
+    scale = _build_scale(params["width"], params["height"])
+    ss    = params.get("start", 0)
+    dur   = params.get("duration")
 
-    seek   = ["-ss", str(ss)] if ss else []
-    limit  = ["-t",  str(dur)] if dur else []
+    seek  = ["-ss", str(ss)] if ss else []
+    limit = ["-t",  str(dur)] if dur else []
 
-    # ── Pass 1: palette ──────────────────────────────────────────────────────
-    def _upd(stage, pct):
-        with _jobs_lock:
-            jobs[job_id].update({"stage": stage, "progress": pct})
-            _save_jobs()
-
-    _upd("Generating palette…", 10)
+    # ── Pass 1: palette ───────────────────────────────────────────────────────
+    _upd(job_id, {"stage": "Generating palette…", "progress": 10})
 
     vf1 = f"fps={fps},{scale},{_COLOR_FIX},format=rgb24,palettegen=stats_mode=diff:max_colors=256"
     rc, err = _run(
@@ -140,13 +139,11 @@ def _convert_gif(job_id: str, params: dict):
     )
     if rc != 0:
         log.error("Pass1 failed:\n%s", err)
-        with _jobs_lock:
-            jobs[job_id].update({"status": "error", "error": f"Palette step failed: {err[-500:]}"})
-            _save_jobs()
+        _upd(job_id, {"status": "error", "error": f"Palette step failed: {err[-500:]}"})
         return
 
-    # ── Pass 2: GIF conversion ───────────────────────────────────────────────
-    _upd("Converting…", 50)
+    # ── Pass 2: GIF conversion ────────────────────────────────────────────────
+    _upd(job_id, {"stage": "Converting…", "progress": 50})
 
     vf2 = (f"fps={fps},{scale},{_COLOR_FIX},format=rgb24 [x];"
            f"[x][1:v] paletteuse=dither=bayer:bayer_scale=3:diff_mode=rectangle")
@@ -159,26 +156,19 @@ def _convert_gif(job_id: str, params: dict):
 
     if rc != 0:
         log.error("Pass2 failed:\n%s", err)
-        with _jobs_lock:
-            jobs[job_id].update({"status": "error", "error": f"GIF step failed: {err[-500:]}"})
-            _save_jobs()
+        _upd(job_id, {"status": "error", "error": f"GIF step failed: {err[-500:]}"})
         return
 
-    # ── Unique noise ─────────────────────────────────────────────────────────
-    _upd("Finalising…", 90)
-
+    # ── Done ──────────────────────────────────────────────────────────────────
     size = Path(gif_out).stat().st_size
-    with _jobs_lock:
-        jobs[job_id].update({
-            "status": "done", "stage": "Done", "progress": 100,
-            "gif": gif_out, "gif_size": size,
-        })
-        _save_jobs()
+    _upd(job_id, {
+        "status": "done", "stage": "Done", "progress": 100,
+        "gif": gif_out, "gif_size": size,
+    })
     log.info("GIF done: %s (%.1f MB)", job_id, size / 1e6)
 
 
 def _convert_mp4(job_id: str, gif_job_id: str):
-    """Single-pass silent MP4 from same source as the GIF job."""
     gif_job = _get_job(gif_job_id)
     if not gif_job:
         return
@@ -202,43 +192,12 @@ def _convert_mp4(job_id: str, gif_job_id: str):
          "-movflags", "+faststart", out]
     )
     if rc != 0:
-        with _jobs_lock:
-            jobs[job_id].update({"status": "error", "error": err[-400:]})
-            _save_jobs()
+        _upd(job_id, {"status": "error", "error": err[-400:]})
         return
 
     size = Path(out).stat().st_size
-    with _jobs_lock:
-        jobs[job_id].update({"status": "done", "mp4": out, "mp4_size": size})
-        _save_jobs()
-
-
-def _add_noise(gif_path: str):
-    """Nudge ±1 on a tiny handful of pixels so every output GIF is unique."""
-    try:
-        from PIL import Image, ImageSequence
-        img = Image.open(gif_path)
-        frames, durations = [], []
-        for frame in ImageSequence.Iterator(img):
-            durations.append(frame.info.get("duration", 50))
-            f = frame.convert("RGBA")
-            px = f.load()
-            w, h = f.size
-            n = max(5, min(30, int(w * h * 0.0001)))
-            for _ in range(n):
-                x, y = random.randint(0, w - 1), random.randint(0, h - 1)
-                r, g, b, a = px[x, y]
-                ch = random.randint(0, 2)
-                d  = random.choice([-1, 1])
-                if ch == 0: r = max(0, min(255, r + d))
-                elif ch == 1: g = max(0, min(255, g + d))
-                else:         b = max(0, min(255, b + d))
-                px[x, y] = (r, g, b, a)
-            frames.append(f.convert("P", palette=Image.ADAPTIVE, colors=256))
-        frames[0].save(gif_path, save_all=True, append_images=frames[1:],
-                       loop=0, duration=durations, optimize=False)
-    except Exception as exc:
-        log.warning("Noise pass skipped: %s", exc)
+    _upd(job_id, {"status": "done", "mp4": out, "mp4_size": size})
+    log.info("MP4 done: %s (%.1f MB)", job_id, size / 1e6)
 
 
 # ── Routes ─────────────────────────────────────────────────────────────────────
@@ -257,8 +216,8 @@ def convert():
     if ext not in ALLOWED_EXT:
         return jsonify(error=f"Unsupported format: {ext}"), 400
 
-    job_id  = uuid.uuid4().hex
-    inp     = str(UPLOAD_DIR / f"{job_id}{ext}")
+    job_id = uuid.uuid4().hex
+    inp    = str(UPLOAD_DIR / f"{job_id}{ext}")
     f.save(inp)
 
     try:
