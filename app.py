@@ -166,7 +166,6 @@ def _convert_gif(job_id: str, params: dict):
 
     # ── Unique noise ─────────────────────────────────────────────────────────
     _upd("Finalising…", 90)
-    _add_noise(gif_out)
 
     size = Path(gif_out).stat().st_size
     with _jobs_lock:
